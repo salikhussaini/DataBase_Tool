@@ -17,6 +17,8 @@ class CSVToSQLiteConverter:
         self.df = None
 
         # TeraData Inputs
+        self.TD_DSN = 'teradata-data.fyiblue.com'
+        self.TD_Driver = 'Teradata Database ODBC Driver 16.20'
         self.TD_UserName = None
         self.TD_PassWord = None
         self.conn = None
@@ -234,18 +236,19 @@ class CSVToSQLiteConverter:
         def get_credentials():
             self.TD_UserName = username_entry.get()
             self.TD_PassWord = password_entry.get()
-            if self.TD_UserName is '' or self.TD_PassWord is '':
+            if self.TD_UserName == '' or self.TD_PassWord == '':
                 self.show_message("Warning", "UserName or PassWord Not Entered", "warning")
                 return
             else:
                 status_bar_credentials.config(text="Credentials entered")
                     
         def connect_to_teradata():
-            if self.TD_UserName != '' and self.TD_PassWord != '':
+            get_credentials()
+            if ((self.TD_UserName != '' and self.TD_PassWord != '') or (self.TD_UserName is None and self.TD_PassWord is None)):
                 try:
                     # Construct the ODBC connection string
-                    odbc_connection_string = f"DSN={teradata_dsn};UID={self.TD_UserName};PWD={self.TD_PassWord}"
-
+                    odbc_connection_string = f"DRIVER={self.TD_Driver};DBCNAME={self.TD_DSN};UID={self.TD_UserName};PWD={self.TD_PassWord};authentication=LDAP"
+                    print(odbc_connection_string)
                     # Establish ODBC connection to Teradata
                     conn = pyodbc.connect(odbc_connection_string)
                     status_bar_credentials.config(text="Connected to Teradata")
@@ -269,7 +272,16 @@ class CSVToSQLiteConverter:
 
                 # Fetch and display table names
                 cursor = self.conn.cursor()
-                cursor.execute("SHOW TABLES;")
+                get_table_for_user = f"""
+                    select distinct T2.DatabaseName
+                    from (select RoleName from DBC.ROLEMEMBERS where Grantee = '{self.TD_UserName}') T1
+                    inner join (
+                        SELECT distinct RoleName,	DatabaseName FROM DBC.ALLROLERIGHTS
+                        ) T2
+                    on T1.RoleName = T2.RoleName
+                
+                """
+                cursor.execute(get_table_for_user)
                 tables = [row[0] for row in cursor.fetchall()]
 
                 # Insert table names into the Text widget
@@ -283,12 +295,10 @@ class CSVToSQLiteConverter:
                 self.show_message("Error", f"Error connecting to Teradata: {e}", "warning")
 
         # OK button to get credentials
-        ok_button = tk.Button(credentials_window, text="OK", command=get_credentials)
-        ok_button.grid(row=2, column=0, columnspan=1, pady=10)
         ok_button = tk.Button(credentials_window, text="Connect to TeraData", command=connect_to_teradata)
-        ok_button.grid(row=2, column=1, columnspan=1, pady=10)
-        ok_button = tk.Button(credentials_window, text="Connect to TeraData", command=fetch_teradata_tables)
-        ok_button.grid(row=3, column=1, columnspan=1, pady=10)
+        ok_button.grid(row=2, column=0, columnspan=2, pady=10)
+        ok_button = tk.Button(credentials_window, text="Fetch Tables User Has Access To", command=fetch_teradata_tables)
+        ok_button.grid(row=3, column=0, columnspan=2, pady=10)
 
     def get_file_path(self, file_type, file_extension, save=False):
         dialog_method = filedialog.asksaveasfilename if save else filedialog.askopenfilename
