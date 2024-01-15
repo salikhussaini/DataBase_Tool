@@ -6,6 +6,9 @@ import sqlite3
 import pandas as pd
 import pyodbc
 
+import asyncio
+import concurrent.futures
+
 class CSVToSQLiteConverter:
     def __init__(self, root):
         # Initialize the class with the main Tkinter window
@@ -13,8 +16,10 @@ class CSVToSQLiteConverter:
         self.root.title("CSV to SQLite Converter") # Set the window title
         self.df = None
 
+        # TeraData Inputs
         self.TD_UserName = None
         self.TD_PassWord = None
+        self.conn = None
         # Initialize variables for progress bar
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(self.root, variable=self.progress_var, mode="indeterminate")
@@ -29,12 +34,16 @@ class CSVToSQLiteConverter:
         
         # This function will be called when the window is closed
         if confirmed:
-            # Close the ODBC connection if it exists
-            if self.odbc_connection is not None:
-                self.odbc_connection.close()
+            try:
+                # Close the ODBC connection if it exists
+                if self.odbc_connection is not None:
+                    self.odbc_connection.close()
 
-            # Destroy the root window
-            self.root.destroy()
+                # Destroy the root window
+                self.root.destroy()
+            except AttributeError:
+                # Destroy the root window
+                self.root.destroy()
     def create_widgets(self):
         # Create labels and buttons
         self.label = tk.Label(self.root, text="Select CSV File:")
@@ -208,7 +217,7 @@ class CSVToSQLiteConverter:
 
         # Create a status bar for the credentials window
         status_bar_credentials = tk.Label(credentials_window, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
-        status_bar_credentials.grid(row=3, column=0, columnspan=2, sticky=tk.W + tk.E)
+        status_bar_credentials.grid(row=20, column=0, columnspan=2, sticky=tk.W + tk.E)
 
 
         # Create labels and entry widgets for username and password
@@ -232,7 +241,7 @@ class CSVToSQLiteConverter:
                 status_bar_credentials.config(text="Credentials entered")
                     
         def connect_to_teradata():
-            if self.TD_UserName is not None and self.TD_PassWord is not None:
+            if self.TD_UserName != '' and self.TD_PassWord != '':
                 try:
                     # Construct the ODBC connection string
                     odbc_connection_string = f"DSN={teradata_dsn};UID={self.TD_UserName};PWD={self.TD_PassWord}"
@@ -244,12 +253,42 @@ class CSVToSQLiteConverter:
                 except pyodbc.Error as e:
                     status_bar_credentials.config(text=f"Error connecting to Teradata: {e}")
                     return None
-        
+        def fetch_teradata_tables():
+            if self.conn is None:
+                self.show_message("Warning", "Please connect to Teradata first.", "warning")
+                return
+
+            try:
+                # Create a new window for displaying Teradata tables
+                tables_window = tk.Toplevel(self.root)
+                tables_window.title("Teradata Tables")
+
+                # Create a Text widget for displaying table names
+                tables_text = tk.Text(tables_window, wrap=tk.WORD)
+                tables_text.pack()
+
+                # Fetch and display table names
+                cursor = self.conn.cursor()
+                cursor.execute("SHOW TABLES;")
+                tables = [row[0] for row in cursor.fetchall()]
+
+                # Insert table names into the Text widget
+                for table in tables:
+                    tables_text.insert(tk.END, f"{table}\n")
+
+                # Close the cursor and connection
+                cursor.close()
+
+            except pyodbc.Error as e:
+                self.show_message("Error", f"Error connecting to Teradata: {e}", "warning")
+
         # OK button to get credentials
         ok_button = tk.Button(credentials_window, text="OK", command=get_credentials)
         ok_button.grid(row=2, column=0, columnspan=1, pady=10)
         ok_button = tk.Button(credentials_window, text="Connect to TeraData", command=connect_to_teradata)
         ok_button.grid(row=2, column=1, columnspan=1, pady=10)
+        ok_button = tk.Button(credentials_window, text="Connect to TeraData", command=fetch_teradata_tables)
+        ok_button.grid(row=3, column=1, columnspan=1, pady=10)
 
     def get_file_path(self, file_type, file_extension, save=False):
         dialog_method = filedialog.asksaveasfilename if save else filedialog.askopenfilename
