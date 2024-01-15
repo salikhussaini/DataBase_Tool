@@ -6,22 +6,119 @@ import sqlite3
 import pandas as pd
 import pyodbc
 
-import asyncio
-import concurrent.futures
-
-class CSVToSQLiteConverter:
+class TeradataHandler:
     def __init__(self, root):
+        self.root = root
+        # TeraData Inputs
+        self.TD_DSN = 'teradata-data.fyiblue.com'
+        self.TD_Driver = 'Teradata Database ODBC Driver 16.20'
+        self.conn = None
+        self.TD_UserName = None
+        self.TD_PassWord = None
+
+    def get_credentials_window(self):
+        # Create a new Toplevel window for getting Teradata credentials
+        credentials_window = tk.Toplevel(self.root)
+        credentials_window.title("Teradata Credentials")
+
+        # Create a status bar for the credentials window
+        status_bar_credentials = tk.Label(credentials_window, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
+        status_bar_credentials.grid(row=20, column=0, columnspan=2, sticky=tk.W + tk.E)
+
+
+        # Create labels and entry widgets for username and password
+        tk.Label(credentials_window, text="Username:").grid(row=0, column=0, padx=10, pady=5)
+        username_entry = tk.Entry(credentials_window)
+        username_entry.grid(row=0, column=1, padx=10, pady=5)
+
+        tk.Label(credentials_window, text="Password:").grid(row=1, column=0, padx=10, pady=5)
+        password_entry = tk.Entry(credentials_window, show='*')
+        password_entry.grid(row=1, column=1, padx=10, pady=5)
+        
+        # Function to get credentials when OK button is pressed
+        def get_credentials():
+            self.TD_UserName = username_entry.get()
+            self.TD_PassWord = password_entry.get()
+            if self.TD_UserName == '' or self.TD_PassWord == '':
+                self.show_message("Warning", "UserName or PassWord Not Entered", "warning")
+                return
+            else:
+                status_bar_credentials.config(text="Credentials entered")
+                    
+        def connect_to_teradata():
+            get_credentials()
+            if ((self.TD_UserName != '' and self.TD_PassWord != '') or (self.TD_UserName is None and self.TD_PassWord is None)):
+                try:
+                    # Construct the ODBC connection string
+                    odbc_connection_string = f"DRIVER={self.TD_Driver};DBCNAME={self.TD_DSN};UID={self.TD_UserName};PWD={self.TD_PassWord};authentication=LDAP"
+                    print(odbc_connection_string)
+                    # Establish ODBC connection to Teradata
+                    conn = pyodbc.connect(odbc_connection_string)
+                    status_bar_credentials.config(text="Connected to Teradata")
+                    self.conn = conn
+                except pyodbc.Error as e:
+                    status_bar_credentials.config(text=f"Error connecting to Teradata: {e}")
+                    return None
+        def fetch_teradata_tables():
+            if self.conn is None:
+                self.show_message("Warning", "Please connect to Teradata first.", "warning")
+                return
+
+            try:
+                # Create a new window for displaying Teradata tables
+                tables_window = tk.Toplevel(self.root)
+                tables_window.title("Teradata Tables")
+
+                # Create a Text widget for displaying table names
+                tables_text = tk.Text(tables_window, wrap=tk.WORD)
+                tables_text.pack()
+
+                # Fetch and display table names
+                cursor = self.conn.cursor()
+                get_table_for_user = f"""
+                    select distinct T2.DatabaseName
+                    from (select RoleName from DBC.ROLEMEMBERS where Grantee = '{self.TD_UserName}') T1
+                    inner join (
+                        SELECT distinct RoleName,	DatabaseName FROM DBC.ALLROLERIGHTS
+                        ) T2
+                    on T1.RoleName = T2.RoleName
+                
+                """
+                cursor.execute(get_table_for_user)
+                tables = [row[0] for row in cursor.fetchall()]
+
+                # Insert table names into the Text widget
+                for table in tables:
+                    tables_text.insert(tk.END, f"{table}\n")
+
+                # Close the cursor and connection
+                cursor.close()
+
+            except pyodbc.Error as e:
+                self.show_message("Error", f"Error connecting to Teradata: {e}", "warning")
+
+        # OK button to get credentials
+        ok_button = tk.Button(credentials_window, text="Connect to TeraData", command=connect_to_teradata)
+        ok_button.grid(row=2, column=0, columnspan=2, pady=10)
+        ok_button = tk.Button(credentials_window, text="Fetch Tables User Has Access To", command=fetch_teradata_tables)
+        ok_button.grid(row=3, column=0, columnspan=2, pady=10)
+
+    def show_message(self, title, message, message_type="info"):
+        # Display a message box with the specified title and message
+        if message_type == "info":
+            messagebox.showinfo(title, message)
+        elif message_type == "warning":
+            messagebox.showwarning(title, message)
+
+
+class CSVToSQLiteConverter(TeradataHandler):
+    def __init__(self, root):
+        super().__init__(root)
         # Initialize the class with the main Tkinter window
         self.root = root
         self.root.title("CSV to SQLite Converter") # Set the window title
         self.df = None
 
-        # TeraData Inputs
-        self.TD_DSN = 'teradata-data.fyiblue.com'
-        self.TD_Driver = 'Teradata Database ODBC Driver 16.20'
-        self.TD_UserName = None
-        self.TD_PassWord = None
-        self.conn = None
         # Initialize variables for progress bar
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(self.root, variable=self.progress_var, mode="indeterminate")
@@ -75,7 +172,7 @@ class CSVToSQLiteConverter:
         self.preview_button = tk.Button(self.operations_frame, text="Preview Data", command=self.preview_data)
         self.preview_button.pack(side=tk.LEFT, padx=5)
 
-        self.teradata_button = tk.Button(self.operations_frame, text="Connect to TeraData", command=self.get_teradata_credentials)
+        self.teradata_button = tk.Button(self.operations_frame, text="Connect to TeraData", command=self.get_credentials_window)
         self.teradata_button.pack(side=tk.LEFT, padx=5)
         
         self.status_bar = tk.Label(self.root, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
@@ -212,104 +309,6 @@ class CSVToSQLiteConverter:
         preview_text = tk.Text(preview_window, wrap=tk.WORD)
         preview_text.insert(tk.END, self.df.head())
         preview_text.pack()
-    def get_teradata_credentials(self):
-        # Create a new Toplevel window for getting Teradata credentials
-        credentials_window = tk.Toplevel(self.root)
-        credentials_window.title("Teradata Credentials")
-
-        # Create a status bar for the credentials window
-        status_bar_credentials = tk.Label(credentials_window, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
-        status_bar_credentials.grid(row=20, column=0, columnspan=2, sticky=tk.W + tk.E)
-
-
-        # Create labels and entry widgets for username and password
-        tk.Label(credentials_window, text="Username:").grid(row=0, column=0, padx=10, pady=5)
-        username_entry = tk.Entry(credentials_window)
-        username_entry.grid(row=0, column=1, padx=10, pady=5)
-
-        tk.Label(credentials_window, text="Password:").grid(row=1, column=0, padx=10, pady=5)
-        password_entry = tk.Entry(credentials_window, show='*')
-        password_entry.grid(row=1, column=1, padx=10, pady=5)
-        teradata_username = None
-        
-        # Function to get credentials when OK button is pressed
-        def get_credentials():
-            self.TD_UserName = username_entry.get()
-            self.TD_PassWord = password_entry.get()
-            if self.TD_UserName == '' or self.TD_PassWord == '':
-                self.show_message("Warning", "UserName or PassWord Not Entered", "warning")
-                return
-            else:
-                status_bar_credentials.config(text="Credentials entered")
-                    
-        def connect_to_teradata():
-            get_credentials()
-            if ((self.TD_UserName != '' and self.TD_PassWord != '') or (self.TD_UserName is None and self.TD_PassWord is None)):
-                try:
-                    # Construct the ODBC connection string
-                    odbc_connection_string = f"DRIVER={self.TD_Driver};DBCNAME={self.TD_DSN};UID={self.TD_UserName};PWD={self.TD_PassWord};authentication=LDAP"
-                    print(odbc_connection_string)
-                    # Establish ODBC connection to Teradata
-                    conn = pyodbc.connect(odbc_connection_string)
-                    status_bar_credentials.config(text="Connected to Teradata")
-                    self.conn = conn
-                except pyodbc.Error as e:
-                    status_bar_credentials.config(text=f"Error connecting to Teradata: {e}")
-                    return None
-        def fetch_teradata_tables():
-            if self.conn is None:
-                self.show_message("Warning", "Please connect to Teradata first.", "warning")
-                return
-
-            try:
-                # Create a new window for displaying Teradata tables
-                tables_window = tk.Toplevel(self.root)
-                tables_window.title("Teradata Tables")
-
-                # Create a Text widget for displaying table names
-                tables_text = tk.Text(tables_window, wrap=tk.WORD)
-                tables_text.pack()
-
-                # Fetch and display table names
-                cursor = self.conn.cursor()
-                get_table_for_user = f"""
-                    select distinct T2.DatabaseName
-                    from (select RoleName from DBC.ROLEMEMBERS where Grantee = '{self.TD_UserName}') T1
-                    inner join (
-                        SELECT distinct RoleName,	DatabaseName FROM DBC.ALLROLERIGHTS
-                        ) T2
-                    on T1.RoleName = T2.RoleName
-                
-                """
-                cursor.execute(get_table_for_user)
-                tables = [row[0] for row in cursor.fetchall()]
-
-                # Insert table names into the Text widget
-                for table in tables:
-                    tables_text.insert(tk.END, f"{table}\n")
-
-                # Close the cursor and connection
-                cursor.close()
-
-            except pyodbc.Error as e:
-                self.show_message("Error", f"Error connecting to Teradata: {e}", "warning")
-
-        # OK button to get credentials
-        ok_button = tk.Button(credentials_window, text="Connect to TeraData", command=connect_to_teradata)
-        ok_button.grid(row=2, column=0, columnspan=2, pady=10)
-        ok_button = tk.Button(credentials_window, text="Fetch Tables User Has Access To", command=fetch_teradata_tables)
-        ok_button.grid(row=3, column=0, columnspan=2, pady=10)
-
-    def get_file_path(self, file_type, file_extension, save=False):
-        dialog_method = filedialog.asksaveasfilename if save else filedialog.askopenfilename
-        file_path = dialog_method(filetypes=[(file_type, file_extension)])
-        return file_path 
-    def show_message(self, title, message, message_type="info"):
-        # Display a message box with the specified title and message
-        if message_type == "info":
-            messagebox.showinfo(title, message)
-        elif message_type == "warning":
-            messagebox.showwarning(title, message)
     def confirm_overwrite(self, file_type):
         overwrite = messagebox.askyesno(
             "Confirmation",
