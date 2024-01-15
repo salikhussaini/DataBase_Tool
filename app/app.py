@@ -1,4 +1,5 @@
 import tkinter as tk
+import os
 from tkinter import filedialog, messagebox, ttk    # Import messagebox from tkinter
 
 from tkinter import filedialog
@@ -9,12 +10,18 @@ import pyodbc
 class TeradataHandler:
     def __init__(self, root):
         self.root = root
+        self.dir_path = os.path.dirname(os.path.abspath(__file__))
         # TeraData Inputs
         self.TD_DSN = 'teradata-data.fyiblue.com'
         self.TD_Driver = 'Teradata Database ODBC Driver 16.20'
         self.conn = None
         self.TD_UserName = None
         self.TD_PassWord = None
+
+        self.DBs = None
+        self.tables = None
+
+
 
     def get_credentials_window(self):
         # Create a new Toplevel window for getting Teradata credentials
@@ -51,7 +58,6 @@ class TeradataHandler:
                 try:
                     # Construct the ODBC connection string
                     odbc_connection_string = f"DRIVER={self.TD_Driver};DBCNAME={self.TD_DSN};UID={self.TD_UserName};PWD={self.TD_PassWord};authentication=LDAP"
-                    print(odbc_connection_string)
                     # Establish ODBC connection to Teradata
                     conn = pyodbc.connect(odbc_connection_string)
                     status_bar_credentials.config(text="Connected to Teradata")
@@ -59,20 +65,11 @@ class TeradataHandler:
                 except pyodbc.Error as e:
                     status_bar_credentials.config(text=f"Error connecting to Teradata: {e}")
                     return None
-        def fetch_teradata_tables():
+        def fetch_teradata_DBs():
             if self.conn is None:
                 self.show_message("Warning", "Please connect to Teradata first.", "warning")
                 return
-
             try:
-                # Create a new window for displaying Teradata tables
-                tables_window = tk.Toplevel(self.root)
-                tables_window.title("Teradata Tables")
-
-                # Create a Text widget for displaying table names
-                tables_text = tk.Text(tables_window, wrap=tk.WORD)
-                tables_text.pack()
-
                 # Fetch and display table names
                 cursor = self.conn.cursor()
                 get_table_for_user = f"""
@@ -85,24 +82,104 @@ class TeradataHandler:
                 
                 """
                 cursor.execute(get_table_for_user)
-                tables = [row[0] for row in cursor.fetchall()]
-
-                # Insert table names into the Text widget
-                for table in tables:
-                    tables_text.insert(tk.END, f"{table}\n")
-
+                self.DBs = [row[0].strip() for row in cursor.fetchall()]
                 # Close the cursor and connection
                 cursor.close()
-
             except pyodbc.Error as e:
                 self.show_message("Error", f"Error connecting to Teradata: {e}", "warning")
+        def show_teradata_DBs():
+            if self.DBs is None:
+                fetch_teradata_DBs()
+            # Create a new window for displaying Teradata tables
+            tables_window = tk.Toplevel(self.root)
+            tables_window.title("Teradata Tables")
+
+            # Create a Text widget for displaying table names
+            tables_text = tk.Text(tables_window, wrap=tk.WORD)
+            tables_text.pack()
+
+            # Insert table names into the Text widget
+            for table in self.DBs:
+                tables_text.insert(tk.END, f"{table}\n")
+        def export_teradata_DBs():
+            if self.DBs is None:
+                fetch_teradata_DBs()
+            file_path = f'{self.dir_path}\\Data\\User_Access_DataBase.csv'
+            with open(file_path,'w') as file:
+                # Insert table names into the Text widget
+                file.write(f"Table_Number,DataBase\n")
+                for idx,table in enumerate(self.DBs, start=1):
+                    file.write(f"{idx},{table}\n")
+            status_bar_credentials.config(text=f"DataBase access file exported to:\n{file_path}")
+      
+      
+      
+        def fetch_teradata_Tables():
+            if self.conn is None:
+                self.show_message("Warning", "Please connect to Teradata first.", "warning")
+                return
+            try:
+                # Fetch and display table names
+                cursor = self.conn.cursor()
+                get_table_for_user = f"""
+                    select distinct T3.DatabaseName, T3.TableName
+                    from (
+                        select RoleName from DBC.ROLEMEMBERS where Grantee = '{self.TD_UserName}'
+                    ) T1
+                    inner join (
+                        SELECT distinct RoleName, DatabaseName FROM DBC.ALLROLERIGHTS
+                        ) T2
+                    on T1.RoleName = T2.RoleName
+                    inner join (
+                        SELECT distinct DatabaseName, TableName FROM DBC.TablesX
+                        ) T3
+                    on T2.DatabaseName = T3.DatabaseName
+                    ;
+                """
+                cursor.execute(get_table_for_user)
+                self.tables = [[row[0].strip(),row[1].strip()] for row in cursor.fetchall()]
+                # Close the cursor and connection
+                cursor.close()
+            except pyodbc.Error as e:
+                self.show_message("Error", f"Error connecting to Teradata: {e}", "warning")
+        def show_teradata_Tables():
+            if self.tables is None:
+                fetch_teradata_Tables()
+            # Create a new window for displaying Teradata tables
+            tables_window = tk.Toplevel(self.root)
+            tables_window.title("Teradata Tables")
+
+            # Create a Text widget for displaying table names
+            tables_text = tk.Text(tables_window, wrap=tk.WORD)
+            tables_text.pack()
+
+            # Insert table names into the Text widget
+            for table in self.tables:
+                tables_text.insert(tk.END, f"{table[0]},{table[1]}\n")
+        def export_teradata_Tables():
+            if self.tables is None:
+                fetch_teradata_Tables()
+            file_path = f'{self.dir_path}\\Data\\User_Access_Tables.csv'
+            with open(file_path,'w') as file:
+                # Insert table names into the Text widget
+                file.write(f"Table_Number,DataBase,Table_Name\n")
+                for idx,table in enumerate(self.tables, start=1):
+                    file.write(f"{idx},{table[0]},{table[1]}\n")
+            status_bar_credentials.config(text=f"Tables access file exported to:\n{file_path}")
 
         # OK button to get credentials
         ok_button = tk.Button(credentials_window, text="Connect to TeraData", command=connect_to_teradata)
         ok_button.grid(row=2, column=0, columnspan=2, pady=10)
-        ok_button = tk.Button(credentials_window, text="Fetch Tables User Has Access To", command=fetch_teradata_tables)
-        ok_button.grid(row=3, column=0, columnspan=2, pady=10)
 
+        ok_button = tk.Button(credentials_window, text="Show DataBases User Has Access To", command=show_teradata_DBs)
+        ok_button.grid(row=3, column=0, columnspan=1, pady=10)
+        ok_button = tk.Button(credentials_window, text="Export DataBases", command=export_teradata_DBs)
+        ok_button.grid(row=3, column=1, columnspan=1, pady=10)
+
+        ok_button = tk.Button(credentials_window, text="Show Tables User Has Access To", command=show_teradata_Tables)
+        ok_button.grid(row=4, column=0, columnspan=1, pady=10)
+        ok_button = tk.Button(credentials_window, text="Export Tables", command=export_teradata_Tables)
+        ok_button.grid(row=4, column=1, columnspan=1, pady=10)
     def show_message(self, title, message, message_type="info"):
         # Display a message box with the specified title and message
         if message_type == "info":
