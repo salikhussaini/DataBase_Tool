@@ -1,11 +1,14 @@
 import tkinter as tk
 import os
 from tkinter import filedialog, messagebox, ttk    # Import messagebox from tkinter
-
 from tkinter import filedialog
 import sqlite3
 import pandas as pd
 import pyodbc
+
+from teradataml.context.context import create_context,remove_context,get_connection
+from teradataml.dataframe.dataframe import DataFrame
+from teradataml import fastexport
 
 class TeradataHandler:
     def __init__(self, root):
@@ -18,30 +21,104 @@ class TeradataHandler:
         self.TD_UserName = None
         self.TD_PassWord = None
 
+        # TeraData Output
         self.DBs = None
         self.tables = None
+        self.table_definition = None
 
+        # Teradata Selected Inputs
+        self.selected_db = None
+        self.selected_table = None
+    def connect_td_ml(self):
+        try:
+            #Create a connection
+            create_context(
+                host=self.TD_DSN
+                , username=self.TD_UserName
+                , password=self.TD_PassWord
+                , logmech='LDAP'
+            )
+            #Get Connection Object
+            self.conn = get_connection()
+        except:
+            pass
+    def disconnect_td_ml(self):
+        try:
+            remove_context()
+        except Exception as e:
+            print(f'Error Occured: {e}')
+    def td_ml_select(self):
+        # Connect to TeraData
+        self.connect_td_ml()
+        #Define Custom Q
+        custom_query = f"SELECT * FROM {self.selected_db}.{self.selected_table}"
+        #Execute custom SQL queries using the DataFrame.from_query() method
+        self.td_dataframe = DataFrame.from_query(custom_query)
+    def td_ml_export(self):
+        file_path = filedialog.askdirectory()
+        self.td_ml_select()
+        #Export TeraDataML DataFrame to Pandas DataFrame
+        self.pd_dataframe = self.td_dataframe.to_pandas()
+        self.pd_dataframe.to_parquet(f'{file_path}/{self.selected_db}.{self.selected_table}.gzip',compression='gzip')
+        status_bar_credentials.config(text=f"File Exported to {file_path}")
+        self.disconnect_td_ml()
+    def td_ml_export_2(self):
+        file_path = filedialog.askdirectory()
+        self.td_ml_select()
+        #Export TeraDataML DataFrame to Pandas DataFrame
+        pandas_df, err = fastexport(self.td_dataframe)
+        pandas_df.to_parquet(f'{file_path}/{self.selected_db}.{self.selected_table}.gzip',compression='gzip')
+        status_bar_credentials.config(text=f"File Exported to {file_path}")
+        self.disconnect_td_ml()
+    def export_table_widgets(self):        
+        # Export DBs Button
+        TD_8_Button = tk.Button(credentials_window, text="Export Table", command=self.td_ml_export_2)
+        TD_8_Button.grid(row=14, column=0, columnspan=2, pady=10)
+    def export_table_definition_widgets(self):        
+        # Export DBs Button
+        TD_8_Button = tk.Button(credentials_window, text="Export Table Definition", command=self.export_table_def)
+        TD_8_Button.grid(row=13, column=0, columnspan=2, pady=10)
+    def export_table_def(self):
+        # Open a file dialog to select CSV file
+        file_path = filedialog.askdirectory()
+        if file_path:
+            self.label.config(text=f"Selected File: {file_path}")
+            file_path = f'{file_path}\\{self.selected_db}.{self.selected_table}.sql'
+            with open(file_path,'w') as file:
+                file.write(self.table_definition)
 
+        self.export_table_widgets()
+    def fetch_table_def(self):
+        if self.conn is None:
+            self.show_message("Warning", "Please connect to Teradata first.", "warning")
+            return
+        else:
+            try:
+                # Fetch and display table names
+                cursor = self.conn.cursor()
+                get_table_for_user = f"""
+                    show TABLE {self.selected_db}.{self.selected_table}
+                ;
+                """
+                print(get_table_for_user)
+                cursor.execute(get_table_for_user)
+                self.table_definition = [row[0].strip() for row in cursor.fetchall()][0]
+                self.table_definition = self.table_definition.replace('\r     ','')
+                # Close the cursor and connection
+                cursor.close()
 
+                self.export_table_definition_widgets()
+            except pyodbc.Error as e:
+                self.show_message("Error", f"Error connecting to Teradata: {e}", "warning")
+    def get_table_definition_widgets(self):        
+        # Export DBs Button
+        TD_7_Button = tk.Button(credentials_window, text="Get Table Definition", command=self.get_table_definition)
+        TD_7_Button.grid(row=12, column=0, columnspan=2, pady=10)
+    def get_table_definition(self):
+        self.fetch_table_def()
+        if self.table_definition is not None:
+            print(self.table_definition)
     def get_credentials_window(self):
-        # Create a new Toplevel window for getting Teradata credentials
-        credentials_window = tk.Toplevel(self.root)
-        credentials_window.title("Teradata Credentials")
-
-        # Create a status bar for the credentials window
-        status_bar_credentials = tk.Label(credentials_window, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
-        status_bar_credentials.grid(row=20, column=0, columnspan=2, sticky=tk.W + tk.E)
-
-
-        # Create labels and entry widgets for username and password
-        tk.Label(credentials_window, text="Username:").grid(row=0, column=0, padx=10, pady=5)
-        username_entry = tk.Entry(credentials_window)
-        username_entry.grid(row=0, column=1, padx=10, pady=5)
-
-        tk.Label(credentials_window, text="Password:").grid(row=1, column=0, padx=10, pady=5)
-        password_entry = tk.Entry(credentials_window, show='*')
-        password_entry.grid(row=1, column=1, padx=10, pady=5)
-        
         # Function to get credentials when OK button is pressed
         def get_credentials():
             self.TD_UserName = username_entry.get()
@@ -50,8 +127,7 @@ class TeradataHandler:
                 self.show_message("Warning", "UserName or PassWord Not Entered", "warning")
                 return
             else:
-                status_bar_credentials.config(text="Credentials entered")
-                    
+                status_bar_credentials.config(text="Credentials entered")             
         def connect_to_teradata():
             get_credentials()
             if ((self.TD_UserName != '' and self.TD_PassWord != '') or (self.TD_UserName is None and self.TD_PassWord is None)):
@@ -104,16 +180,14 @@ class TeradataHandler:
         def export_teradata_DBs():
             if self.DBs is None:
                 fetch_teradata_DBs()
-            file_path = f'{self.dir_path}\\Data\\User_Access_DataBase.csv'
-            with open(file_path,'w') as file:
-                # Insert table names into the Text widget
-                file.write(f"Table_Number,DataBase\n")
-                for idx,table in enumerate(self.DBs, start=1):
-                    file.write(f"{idx},{table}\n")
-            status_bar_credentials.config(text=f"DataBase access file exported to:\n{file_path}")
-      
-      
-      
+            else:
+                file_path = f'{self.dir_path}\\Data\\User_Access_DataBase.csv'
+                with open(file_path,'w') as file:
+                    # Insert table names into the Text widget
+                    file.write(f"Table_Number,DataBase\n")
+                    for idx,table in enumerate(self.DBs, start=1):
+                        file.write(f"{idx},{table}\n")
+                status_bar_credentials.config(text=f"DataBase access file exported to:\n{file_path}")      
         def fetch_teradata_Tables():
             if self.conn is None:
                 self.show_message("Warning", "Please connect to Teradata first.", "warning")
@@ -132,8 +206,10 @@ class TeradataHandler:
                     on T1.RoleName = T2.RoleName
                     inner join (
                         SELECT distinct DatabaseName, TableName FROM DBC.TablesX
+                        where TableKind = 'T'
                         ) T3
                     on T2.DatabaseName = T3.DatabaseName
+                    order by T3.DatabaseName, T3.TableName
                     ;
                 """
                 cursor.execute(get_table_for_user)
@@ -159,34 +235,126 @@ class TeradataHandler:
         def export_teradata_Tables():
             if self.tables is None:
                 fetch_teradata_Tables()
-            file_path = f'{self.dir_path}\\Data\\User_Access_Tables.csv'
-            with open(file_path,'w') as file:
-                # Insert table names into the Text widget
-                file.write(f"Table_Number,DataBase,Table_Name\n")
-                for idx,table in enumerate(self.tables, start=1):
-                    file.write(f"{idx},{table[0]},{table[1]}\n")
-            status_bar_credentials.config(text=f"Tables access file exported to:\n{file_path}")
+            else:
+                file_path = f'{self.dir_path}\\Data\\User_Access_Tables.csv'
+                with open(file_path,'w') as file:
+                    # Insert table names into the Text widget
+                    file.write(f"Table_Number,DataBase,Table_Name\n")
+                    for idx,table in enumerate(self.tables, start=1):
+                        file.write(f"{idx},{table[0]},{table[1]}\n")
+                status_bar_credentials.config(text=f"Tables access file exported to:\n{file_path}")
+            
+        def on_select_db():
+            self.selected_db = db_list_widget.get()
+            create_tables_select()
+        def on_select_table():
+            self.selected_table = tables_list_widget.get()
+            self.get_table_definition_widgets()
 
-        # OK button to get credentials
-        ok_button = tk.Button(credentials_window, text="Connect to TeraData", command=connect_to_teradata)
-        ok_button.grid(row=2, column=0, columnspan=2, pady=10)
+        def create_db_select(db_list):
+            # Create ComboBox Widget 
+            
+            global db_list_widget
+            
+            db_list_widget = ttk.Combobox(credentials_window, values = db_list)
+            db_list_widget.grid(row=10, column=0, columnspan=1, pady=10)
+            # Set a Default Value
+            db_list_widget.set('Select a DB')
 
-        ok_button = tk.Button(credentials_window, text="Show DataBases User Has Access To", command=show_teradata_DBs)
-        ok_button.grid(row=3, column=0, columnspan=1, pady=10)
-        ok_button = tk.Button(credentials_window, text="Export DataBases", command=export_teradata_DBs)
-        ok_button.grid(row=3, column=1, columnspan=1, pady=10)
+            # Bind the even 
+            TD_1_button = tk.Button(credentials_window, text="GET DB SELECTION", command=on_select_db)
+            TD_1_button.grid(row=10, column=1, columnspan=2, pady=10)
+        def create_tables_select():
+            # Create ComboBox Widget 
+            global tables_list_widget
+            tables_file_path = f'{self.dir_path}\\Data\\User_Access_Tables.csv'
+            df = pd.read_csv(tables_file_path)
+            df = df[df['DataBase'] == self.selected_db]
+            table_list = df['Table_Name'].tolist()
 
-        ok_button = tk.Button(credentials_window, text="Show Tables User Has Access To", command=show_teradata_Tables)
-        ok_button.grid(row=4, column=0, columnspan=1, pady=10)
-        ok_button = tk.Button(credentials_window, text="Export Tables", command=export_teradata_Tables)
-        ok_button.grid(row=4, column=1, columnspan=1, pady=10)
+            tables_list_widget = ttk.Combobox(credentials_window, values = table_list)
+            tables_list_widget.grid(row=11, column=0, columnspan=1, pady=10)
+            # Set a Default Value
+            tables_list_widget.set('Select a Table')
+
+            # Bind the even 
+            TD_1_button = tk.Button(credentials_window, text="Get Table", command=on_select_table)
+            TD_1_button.grid(row=11, column=1, columnspan=2, pady=10)
+        def teradata_DBs():
+            # Check if DataBase exists if not pull data
+            tables_file_path = f'{self.dir_path}\\Data\\User_Access_Tables.csv'
+            db_file_path = f'{self.dir_path}\\Data\\User_Access_DataBase.csv'
+            if ((self.tables is None) and not (os.path.exists(tables_file_path))):
+                self.show_message("Warning", "Please Pull Tables First.", "warning")
+                return
+            elif ((self.tables is not None) or (os.path.exists(tables_file_path))):
+
+                # if no DBs in CACHE 
+                if self.tables is None:
+                    try:
+                        with open(db_file_path, 'r') as file:
+                            dbs = file.readlines()
+                            if len(dbs) > 2:
+                                dbs = [db.split(',')[-1].split('\n')[0] for db in dbs]
+                                create_db_select(dbs)
+
+                    except FileNotFoundError:
+                        export_teradata_Tables()
+                elif self.tables is None:
+                    print(self.Tables)
+        # Create a new Toplevel window for getting Teradata credentials
+        global credentials_window
+        credentials_window = tk.Toplevel(self.root)
+        credentials_window.title("Teradata Credentials")
+
+        # Create a status bar for the credentials window
+        global status_bar_credentials
+        status_bar_credentials = tk.Label(credentials_window, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.W)
+        status_bar_credentials.grid(row=20, column=0, columnspan=2, sticky=tk.W + tk.E)
+
+
+        # Create labels and entry widgets for username and password
+        tk.Label(credentials_window, text="Username:").grid(row=0, column=0, padx=10, pady=5)
+        username_entry = tk.Entry(credentials_window)
+        username_entry.grid(row=0, column=1, padx=10, pady=5)
+
+        tk.Label(credentials_window, text="Password:").grid(row=1, column=0, padx=10, pady=5)
+        password_entry = tk.Entry(credentials_window, show='*')
+        password_entry.grid(row=1, column=1, padx=10, pady=5)
+
+        # Connect to TeraData Button
+        TD_1_button = tk.Button(credentials_window, text="Connect to TeraData", command=connect_to_teradata)
+        TD_1_button.grid(row=2, column=0, columnspan=2, pady=10)
+
+        # Show DBs Button
+        TD_2_Button = tk.Button(credentials_window, text="Show DataBases User Has Access To", command=show_teradata_DBs)
+        TD_2_Button.grid(row=3, column=0, columnspan=1, pady=10)
+        
+        # Export DBs Button
+        TD_3_Button = tk.Button(credentials_window, text="Export DataBases", command=export_teradata_DBs)
+        TD_3_Button.grid(row=3, column=1, columnspan=1, pady=10)
+
+        # Show Tables
+        TD_4_Button = tk.Button(credentials_window, text="Show Tables User Has Access To", command=show_teradata_Tables)
+        TD_4_Button.grid(row=4, column=0, columnspan=1, pady=10)
+        
+        # Export Tables
+        TD_5_Button = tk.Button(credentials_window, text="Export Tables", command=export_teradata_Tables)
+        TD_5_Button.grid(row=4, column=1, columnspan=1, pady=10)
+
+        # Choose Table
+        TD_6_Button = tk.Button(credentials_window, text="Get Table Definition ", command=teradata_DBs)
+        TD_6_Button.grid(row=5, column=0, columnspan=1, pady=10)
     def show_message(self, title, message, message_type="info"):
         # Display a message box with the specified title and message
         if message_type == "info":
             messagebox.showinfo(title, message)
         elif message_type == "warning":
             messagebox.showwarning(title, message)
-
+    def get_file_path(self, file_type, file_extension, save=False):
+        dialog_method = filedialog.asksaveasfilename if save else filedialog.askopenfilename
+        file_path = dialog_method(filetypes=[(file_type, file_extension)])
+        return file_path 
 
 class CSVToSQLiteConverter(TeradataHandler):
     def __init__(self, root):
@@ -401,6 +569,10 @@ class CSVToSQLiteConverter(TeradataHandler):
         self.progress_bar.stop()
         self.progress_bar.config(mode="indeterminate")
         self.update_status_bar("Ready")
+    def get_file_path(self, file_type, file_extension, save=False):
+        dialog_method = filedialog.asksaveasfilename if save else filedialog.askopenfilename
+        file_path = dialog_method(filetypes=[(file_type, file_extension)])
+        return file_path 
 if __name__ == "__main__":
     root = tk.Tk()
     app = CSVToSQLiteConverter(root)
